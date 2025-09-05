@@ -32,13 +32,15 @@ var cfg *config
 
 func main() {
 	initCfg()
+
 	scheduler, err := gocron.NewScheduler()
 	panicIfErr(err)
-	setupCronJob(scheduler)
 
-	scheduler.Start()
-
-	systray.Run(onReady, func() {
+	systray.Run(func() {
+		setupCronJob(scheduler)
+		scheduler.Start()
+		onReady()
+	}, func() {
 		err = scheduler.Shutdown()
 		logErr(err)
 	})
@@ -47,7 +49,6 @@ func main() {
 func onReady() {
 	systray.SetIcon(icon.Data)
 	systray.SetTitle("WPaper")
-	systray.SetTooltip("Pretty awesome超级棒")
 	setupNext()
 	setupQuit()
 }
@@ -93,6 +94,12 @@ func loadConfigFromFile(file string) *config {
 }
 
 func filename(url string) string {
+	if cfg.filenameRegex != nil {
+		found := cfg.filenameRegex.FindStringSubmatch(url)
+		if len(found) > 1 {
+			return found[1]
+		}
+	}
 	seconds := time.Now().Unix()
 	return fmt.Sprintf("%d", seconds)
 }
@@ -123,27 +130,46 @@ func download(url string) string {
 func wallpaperPath(filename string) string {
 	wd, err := os.Getwd()
 	panicIfErr(err)
-	dw := filepath.Join(wd, "download")
+
+	today := time.Now().Format("2006-01-02")
+	dw := filepath.Join(wd, "download", today)
 	err = os.MkdirAll(dw, 0755)
 	panicIfErr(err)
 	return filepath.Join(dw, filename)
 }
 
 func setupCronJob(s gocron.Scheduler) {
-	_, err := s.NewJob(
+	if cfg.Cron == "" {
+		return
+	}
+
+	var j gocron.Job
+	j, err := s.NewJob(
 		gocron.CronJob(cfg.Cron, true),
 		gocron.NewTask(
 			func() {
-				fmt.Println(11)
+				t, err := j.NextRun()
+				logErr(err)
+				nextFireTime := t.Format("15:04:05")
+				systray.SetTooltip(fmt.Sprintf("Next Fire Time: %s", nextFireTime))
+
+				filePath := download(cfg.Url)
+				execute(filePath)
 			},
 		),
 	)
 	panicIfErr(err)
+
+	t, err := j.NextRun()
+	logErr(err)
+	nextFireTime := t.Format("15:04:05")
+	systray.SetTooltip(fmt.Sprintf("Next Fire Time: %s", nextFireTime))
 }
 
 func execute(absPath string) {
 	args := fmt.Sprintf(cfg.Args, absPath)
 	cmd := exec.Command(cfg.Cmd, args)
+	initCmd(cmd)
 	stdout, err := cmd.Output()
 	logErr(err)
 	fmt.Println(string(stdout))
